@@ -1,494 +1,385 @@
 // ============================================
-// POLITI MDT v2.0 - Komplet System
+// POLITI MDT v3.0 - Professionelt Dansk System
 // ============================================
 
 let currentSession = null;
 let currentProfile = null;
-let inactivityTimer = null;
-let isLoggingOut = false; // Flag til at undgå popup ved logud
-const LOCK_TIMEOUT = 15 * 60 * 1000; // 15 minutter
+let selectedCrimes = []; // Liste over valgte paragraffer til beregning
+let isLoggingOut = false;
 
 // ============================================
 // INIT
 // ============================================
 document.addEventListener('DOMContentLoaded', async () => {
-    if (document.getElementById('login-form')) {
-        initLogin();
-    } else if (document.getElementById('user-name')) {
-        initDashboard();
+    const session = await _supabase.auth.getSession();
+    if (!session.data.session) {
+        if (!window.location.href.includes('login.html')) {
+            window.location.href = 'login.html';
+        }
+        return;
     }
+    
+    currentSession = session.data.session;
+    await loadProfile();
+    initDashboard();
 });
 
-async function checkAuth() {
-    const { data: { session } } = await _supabase.auth.getSession();
-    if (!session) {
-        window.location.href = 'login.html';
-        return null;
-    }
-    return session;
-}
-
-// ============================================
-// LOGIN
-// ============================================
-function initLogin() {
-    const loginForm = document.getElementById('login-form');
-    const errorMsg = document.getElementById('error-msg');
-
-    loginForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        errorMsg.innerText = 'Logger ind...';
-        const email = document.getElementById('email').value;
-        const password = document.getElementById('password').value;
-
-        const { data, error } = await _supabase.auth.signInWithPassword({ email, password });
-
-        if (error) {
-            errorMsg.innerText = "Fejl: " + error.message;
-        } else {
-            window.location.href = 'dashboard.html';
-        }
-    });
-}
-
-// ============================================
-// DASHBOARD
-// ============================================
-async function initDashboard() {
-    // 1. Auth check
-    const session = await checkAuth();
-    if (!session) return;
-    currentSession = session;
-
-    // 2. Hent profil
+async function loadProfile() {
     const { data: profile } = await _supabase
         .from('betjente')
         .select('*')
-        .eq('id', session.user.id)
+        .eq('id', currentSession.user.id)
         .single();
     currentProfile = profile;
+}
 
-    if (profile) {
-        document.getElementById('user-name').innerText = profile.navn;
-        document.getElementById('user-role').innerText = profile.rolle.toUpperCase();
-        if (isOfficer()) {
+// ============================================
+// DASHBOARD CORE
+// ============================================
+async function initDashboard() {
+    if (!document.getElementById('welcome-msg')) return;
+
+    // 1. Vis/Skjul elementer baseret på profil
+    updateUIProfile();
+    
+    // 2. Tjek FLÅDE SYSTEM (Vagt status)
+    checkDutyStatus();
+
+    // 3. Navigation
+    setupNavigation();
+
+    // 4. Live Systemer
+    startLiveSystems();
+
+    // 5. Load Data
+    updateStats();
+    loadCriminalCode();
+    loadSager();
+    loadBoeder();
+    loadStraffeattester();
+    if (isAdmin()) loadAdminUsers();
+
+    // 6. Listeners
+    setupEventListeners();
+}
+
+function updateUIProfile() {
+    const badge = document.getElementById('user-badge');
+    const pnum = document.getElementById('pnum-display');
+    
+    if (currentProfile) {
+        badge.innerText = currentProfile.navn;
+        pnum.innerText = currentProfile.p_nummer || 'P-???';
+        
+        if (currentProfile.rolle === 'admin') {
             document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'block');
         }
-        if (profile.rolle === 'admin') {
-            document.body.classList.add('is-admin');
-        }
     }
+}
 
-    // 3. Navigation setup
+function setupNavigation() {
     document.querySelectorAll('.nav-item').forEach(item => {
         item.addEventListener('click', () => {
             const target = item.getAttribute('data-target');
+            if (!target) return;
+
             document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
             item.classList.add('active');
+            
             document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
             document.getElementById(target).classList.add('active');
         });
     });
+}
 
-    // 4. Tjek vagt status!
-    await checkDutyStatus();
+function startLiveSystems() {
+    // Live Ur
+    setInterval(() => {
+        const now = new Date();
+        document.getElementById('live-clock').innerText = now.toLocaleTimeString('da-DK', { hour12: false });
+    }, 1000);
 
-    // 5. Load data
-    loadSager();
-    loadBoeder();
-    loadTrash();
-    loadStraffeattester();
-    if (isAdmin()) {
-        loadAdminUsers();
-        setupAdminPanel();
-    }
-
-    // 6. Security & Profile
-    setupSecurityLocks();
-    setupProfileSecurity();
-    setupCreateSag();
-    setupCreateBoede();
-    setupEditModal();
-    setupRealtime();
-
-    // 7. Event listeners for knapper
-    document.getElementById('clock-out-btn')?.addEventListener('click', clockOutAndLogout);
-    document.getElementById('duty-logout')?.addEventListener('click', clockOutAndLogout);
-    document.getElementById('filter-btn')?.addEventListener('click', () => {
-        const query = document.getElementById('search-input').value;
-        const from = document.getElementById('filter-from').value;
-        const to = document.getElementById('filter-to').value;
-        loadSager(query, from, to);
-    });
-
-    // Søgning i straffeattester
-    document.getElementById('search-attest-input')?.addEventListener('input', (e) => {
-        loadStraffeattester(e.target.value);
-    });
+    // Auto-update stats hver 30. sekund
+    setInterval(updateStats, 30000);
 }
 
 // ============================================
-// OBLIGATORISK VAGT SYSTEM
+// FLÅDE & VAGT SYSTEM
 // ============================================
-let activeDutyId = localStorage.getItem('activeDutyId');
-
-async function checkDutyStatus() {
-    const dutyModal = document.getElementById('duty-screen');
-    const badge = document.getElementById('vagt-status');
-    const btn = document.getElementById('clock-in-btn');
-    if (!dutyModal) return;
-
-    const { data } = await _supabase.from('vagt_log')
-        .select('*')
-        .eq('betjent_id', currentSession.user.id)
-        .is('slut_tid', null)
-        .order('start_tid', { ascending: false })
-        .limit(1);
-
-    if (data && data.length > 0) {
-        activeDutyId = data[0].id;
-        localStorage.setItem('activeDutyId', activeDutyId);
-        dutyModal.style.display = 'none';
-        badge.style.display = 'inline-block';
+function checkDutyStatus() {
+    const overlay = document.getElementById('duty-overlay');
+    if (!currentProfile.is_on_duty) {
+        overlay.style.display = 'flex';
+        setupDutySelector();
     } else {
-        activeDutyId = null;
-        localStorage.removeItem('activeDutyId');
-        dutyModal.style.display = 'flex';
-        badge.style.display = 'none';
+        overlay.style.display = 'none';
+        document.getElementById('unit-display').innerText = `ENHED: ${currentProfile.current_unit || 'INGEN'}`;
     }
+}
 
-    btn?.addEventListener('click', async () => {
-        btn.innerHTML = 'Indstempler...';
-        const { data: newDuty, error } = await _supabase.from('vagt_log').insert({
-            betjent_id: currentSession.user.id
-        }).select().single();
+function setupDutySelector() {
+    const chips = document.querySelectorAll('.unit-chip');
+    let selectedUnit = 'Patrulje';
+
+    chips.forEach(chip => {
+        chip.addEventListener('click', () => {
+            chips.forEach(c => c.classList.remove('selected'));
+            chip.classList.add('selected');
+            selectedUnit = chip.dataset.unit;
+        });
+    });
+
+    document.getElementById('go-on-duty-btn').addEventListener('click', async () => {
+        const pnumInput = document.getElementById('confirm-pnum').value.toUpperCase().trim();
+        const msg = document.getElementById('duty-msg');
+
+        if (pnumInput !== currentProfile.p_nummer.toUpperCase()) {
+            msg.innerText = 'FEJL: P-nummer matcher ikke din profil.';
+            return;
+        }
+
+        // Meld på vagt
+        const { error } = await _supabase.from('betjente').update({
+            is_on_duty: true,
+            current_unit: selectedUnit
+        }).eq('id', currentProfile.id);
 
         if (!error) {
-            activeDutyId = newDuty.id;
-            localStorage.setItem('activeDutyId', activeDutyId);
-            dutyModal.style.display = 'none';
-            badge.style.display = 'inline-block';
-        } else {
-            alert('Fejl: ' + error.message);
-            btn.innerHTML = 'MELD PÅ VAGT NU';
+            currentProfile.is_on_duty = true;
+            currentProfile.current_unit = selectedUnit;
+            document.getElementById('duty-overlay').style.display = 'none';
+            document.getElementById('unit-display').innerText = `ENHED: ${selectedUnit}`;
+            showToast(`Du er nu tilkoblet som ${selectedUnit}`);
+            updateStats();
         }
     });
 }
 
-async function clockOutAndLogout() {
-    isLoggingOut = true; // Sæt flag så før-luk advarsel ikke kommer
-    if (activeDutyId) {
-        await _supabase.from('vagt_log').update({ slut_tid: new Date().toISOString() }).eq('id', activeDutyId);
-    }
-    localStorage.removeItem('activeDutyId');
-    await _supabase.auth.signOut();
-    window.location.href = 'login.html';
+// ============================================
+// STRAFFE-BEREGNER (NY VERSION)
+// ============================================
+async function loadCriminalCode() {
+    const container = document.getElementById('straffe-katalog');
+    if (!container) return;
+
+    const { data: laws, error } = await _supabase.from('straffelov').select('*').order('paragraf');
+    if (error) return;
+
+    container.innerHTML = '';
+    laws.forEach(law => {
+        const div = document.createElement('div');
+        div.className = 'lov-item';
+        div.innerHTML = `
+            <div>
+                <strong style="color:var(--police-accent);">${law.paragraf}</strong> - ${law.titel}
+            </div>
+            <div style="font-size:0.8rem; color:var(--police-text-muted);">
+                ${law.fine_amount ? law.fine_amount.toLocaleString() + ' kr.' : ''} 
+                ${law.jail_days ? ' | ' + law.jail_days + ' dg.' : ''}
+            </div>
+        `;
+        div.addEventListener('click', () => toggleCrime(law));
+        container.appendChild(div);
+    });
 }
 
-window.addEventListener('beforeunload', (e) => {
-    if (activeDutyId && !isLoggingOut) {
-        e.preventDefault();
-        e.returnValue = '';
+function toggleCrime(law) {
+    const idx = selectedCrimes.findIndex(c => c.id === law.id);
+    if (idx > -1) {
+        selectedCrimes.splice(idx, 1);
+    } else {
+        selectedCrimes.push(law);
+    }
+    updatePenaltySummary();
+    
+    // Highlight i listen (visuelt)
+    // Find alle elementer og match på tekst for simpelhed her
+    document.querySelectorAll('.lov-item').forEach(el => {
+        if (el.innerText.includes(law.paragraf)) {
+            el.style.background = selectedCrimes.find(c => c.id === law.id) ? 'rgba(59, 130, 246, 0.2)' : 'transparent';
+        }
+    });
+}
+
+function updatePenaltySummary() {
+    let totalFine = 0;
+    let totalJail = 0;
+
+    selectedCrimes.forEach(c => {
+        totalFine += c.fine_amount || 0;
+        totalJail += c.jail_days || 0;
+    });
+
+    document.getElementById('sum-fine').innerText = totalFine.toLocaleString() + ' kr.';
+    document.getElementById('sum-jail').innerText = totalJail + ' dage';
+}
+
+// UDSTEDELSE
+document.getElementById('create-boede-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (selectedCrimes.length === 0) return alert('Vælg mindst én paragraf!');
+
+    const borger = document.getElementById('boede-borger').value;
+    const aarsag = document.getElementById('boede-aarsag').value;
+    
+    let totalFine = 0;
+    let totalJail = 0;
+    let paragraffer = selectedCrimes.map(c => c.paragraf).join(', ');
+
+    selectedCrimes.forEach(c => {
+        totalFine += c.fine_amount || 0;
+        totalJail += c.jail_days || 0;
+    });
+
+    const { error } = await _supabase.from('boeder').insert([{
+        user_name: borger,
+        user_discord_id: borger, // Vi bruger navnet som ID hvis ikke andet haves
+        amount: totalFine,
+        jail_days: totalJail,
+        paragraf: paragraffer,
+        reason: aarsag,
+        officer_id: currentProfile.id,
+        officer_name: currentProfile.navn,
+        kilde: 'web'
+    }]);
+
+    if (!error) {
+        showToast('Straf er udstedt og journalført.');
+        selectedCrimes = [];
+        updatePenaltySummary();
+        e.target.reset();
+        loadBoeder();
+        loadStraffeattester();
+        // Nulstil highlights
+        document.querySelectorAll('.lov-item').forEach(el => el.style.background = 'transparent');
+    } else {
+        alert('Fejl: ' + error.message);
     }
 });
 
 // ============================================
-// LOAD & RENDER FUNKTIONER
+// STATS & DATA
 // ============================================
+async function updateStats() {
+    // Total sager
+    const { count: sager } = await _supabase.from('sager').select('*', { count: 'exact', head: true });
+    document.getElementById('stat-total-sager').innerText = sager || 0;
 
-async function loadSager(query = '', from = '', to = '') {
-    const list = document.getElementById('sags-liste');
-    if (!list) return;
-    list.innerHTML = '<div class="loading">Henter sager...</div>';
+    // Efterlyste (Vi tæller borgere markeret som efterlyst - kræver kolonne, men her bruger vi aktive bøder som proxy)
+    const { data: wantedData } = await _supabase.from('boeder').select('user_discord_id').eq('afsonet', false);
+    const uniqueWanted = new Set(wantedData?.map(b => b.user_discord_id));
+    document.getElementById('stat-wanted').innerText = uniqueWanted.size;
 
-    // Vi prøver at hente med join, men falder tilbage til simpel select hvis det fejler (pga. FK navne)
-    let q = _supabase.from('sager').select('*, betjente(navn)')
-        .is('slettet_dato', null)
-        .order('oprettet_dato', { ascending: false });
+    // Personer
+    const { count: borgere } = await _supabase.from('borgere').select('*', { count: 'exact', head: true });
+    document.getElementById('stat-born').innerText = borgere || 0;
 
-    if (query) q = q.or(`navn.ilike.%${query}%,cpr.ilike.%${query}%`);
-    if (from) q = q.gte('oprettet_dato', from);
-    if (to) q = q.lte('oprettet_dato', to + 'T23:59:59');
+    // Aktive betjente
+    const { count: aktive } = await _supabase.from('betjente').select('*', { count: 'exact', head: true }).eq('is_on_duty', true);
+    document.getElementById('stat-active').innerText = aktive || 0;
 
-    let { data, error } = await q;
-    
-    // Hvis join fejlede pga. relationer, prøv uden join
-    if (error && error.message.includes('relationship')) {
-        console.warn('FK join fejlede, prøver uden betjente-navn...');
-        const retry = await _supabase.from('sager').select('*')
-            .is('slettet_dato', null)
-            .order('oprettet_dato', { ascending: false });
-        data = retry.data;
-        error = retry.error;
-    }
-
-    if (error) { list.innerHTML = `<div class="error">${error.message}</div>`; return; }
-
-    list.innerHTML = '';
-    data.forEach(sag => {
-        const canEdit = isAdmin() || sag.oprettet_af === currentSession.user.id;
-        const card = document.createElement('div');
-        card.className = 'sag-card';
-        card.innerHTML = `
-            <div class="sag-info">
-                <h3>${escapeHtml(sag.navn)}</h3>
-                <div class="sag-meta">CPR: ${escapeHtml(sag.cpr)} | ${formatDate(sag.oprettet_dato)}</div>
+    // Opdater Feed (Seneste sager)
+    const { data: activity } = await _supabase.from('boeder').select('*').order('created_at', { ascending: false }).limit(5);
+    const feed = document.getElementById('recent-activity');
+    if (feed) {
+        feed.innerHTML = activity?.map(a => `
+            <div style="margin-bottom:10px; border-bottom:1px solid #334155; padding-bottom:5px;">
+                <span class="badge" style="background:var(--police-accent);">BØDE</span> 
+                <strong>${a.user_name}</strong> fik ${a.amount.toLocaleString()} kr. af ${a.officer_name}
             </div>
-            <div class="sag-actions">
-                ${canEdit ? `<button class="btn-sm btn-edit" data-id="${sag.id}">ÅBEN</button>` : ''}
-                ${canEdit ? `<button class="btn-sm btn-delete" data-id="${sag.id}">SLET</button>` : ''}
-            </div>`;
-        list.appendChild(card);
-    });
-
-    list.querySelectorAll('.btn-edit').forEach(b => b.addEventListener('click', () => openEditModal(b.dataset.id)));
-    list.querySelectorAll('.btn-delete').forEach(b => b.addEventListener('click', () => softDeleteSag(b.dataset.id)));
-}
-
-async function loadBoeder() {
-    const list = document.getElementById('boeder-liste');
-    if (!list) return;
-    list.innerHTML = '<div class="loading">Henter bøder...</div>';
-
-    const { data, error } = await _supabase.from('boeder').select('*').is('slettet_dato', null).order('created_at', { ascending: false });
-    if (error) { list.innerHTML = '<div class="error">Fejl.</div>'; return; }
-
-    list.innerHTML = '';
-    data.forEach(b => {
-        const card = document.createElement('div');
-        card.className = 'sag-card boede-card';
-        card.innerHTML = `
-            <div class="sag-info">
-                <h3>⚖️ ${escapeHtml(b.user_name || b.user_discord_id)}</h3>
-                <div class="sag-meta"><strong>${b.amount.toLocaleString('da-DK')} DKK</strong> | Status: ${b.afsonet ? '🟢' : '🔴'}</div>
-                <div class="sag-meta">Årsag: ${escapeHtml(b.reason || 'Ingen')}</div>
-            </div>
-            <div class="sag-actions">
-                ${!b.afsonet && isAdmin() ? `<button class="btn-sm btn-edit mark-afsonet" data-id="${b.id}">✅ Løslad</button>` : ''}
-            </div>`;
-        list.appendChild(card);
-    });
-
-    list.querySelectorAll('.mark-afsonet').forEach(b => b.addEventListener('click', () => setAfsonet(b.dataset.id)));
-}
-
-async function setAfsonet(id) {
-    if (confirm('Markér som afsonet?')) {
-        await _supabase.from('boeder').update({ afsonet: true }).eq('id', id);
-        loadBoeder();
+        `).join('') || 'Ingen nylig aktivitet.';
     }
 }
 
-async function loadStraffeattester(searchQuery = '') {
-    const list = document.getElementById('attester-liste');
-    if (!list) return;
-    list.innerHTML = '<div class="loading">Henter...</div>';
-
-    const { data: borgere } = await _supabase.from('borgere').select('*').order('visningsnavn', { ascending: true });
-    const { data: boeder } = await _supabase.from('boeder').select('*').is('slettet_dato', null);
-
-    if (!borgere) return;
-
-    const grouped = {};
-    borgere.forEach(borger => {
-        grouped[borger.discord_id] = { ...borger, total_gald: 0, boeder: [], isAfsoner: false };
-    });
-
-    boeder?.forEach(b => {
-        if (grouped[b.user_discord_id]) {
-            grouped[b.user_discord_id].total_gald += b.amount;
-            grouped[b.user_discord_id].boeder.push(b);
-            if (!b.afsonet) grouped[b.user_discord_id].isAfsoner = true;
-        }
-    });
-
-    list.innerHTML = '';
-    const query = searchQuery.toLowerCase();
-    Object.values(grouped).forEach(p => {
-        const nameMatch = p.visningsnavn?.toLowerCase().includes(query);
-        const idMatch = p.discord_id?.toString() === query;
-        const partialIdMatch = p.discord_id?.toString().includes(query);
-        
-        if (query && !nameMatch && !idMatch && !partialIdMatch) return;
-        
-        const card = document.createElement('div');
-        card.className = 'sag-card';
-        card.style.borderLeft = personBorder(p);
-        card.innerHTML = `
-            <div class="sag-info">
-                <h3>👤 ${escapeHtml(p.visningsnavn)}</h3>
-                <div class="sag-meta">ID: ${escapeHtml(p.discord_id)} | Rolle: ${escapeHtml(p.roller)} | Gæld: ${p.total_gald.toLocaleString('da-DK')} DKK</div>
-                <div class="sag-meta">Status: ${p.isAfsoner ? '🔴 AFSONER' : (p.boeder.length > 0 ? '🟡 Løsladt' : '🟢 Ren')}</div>
-            </div>
-            <div class="sag-actions">
-                <button class="btn-sm btn-primary view-attest-btn">📜 Åbn Attest</button>
-            </div>`;
-        card.querySelector('.view-attest-btn').addEventListener('click', () => openAttestModal(p));
-        list.appendChild(card);
-    });
-}
-
-function personBorder(p) {
-    if (p.isAfsoner) return '5px solid var(--error-red)';
-    if (p.boeder.length > 0) return '5px solid var(--police-yellow)';
-    return '5px solid var(--success-green)';
-}
-
 // ============================================
-// MODALS & ACTIONS
+// LUKKE SPÆRRING
 // ============================================
-
-function openAttestModal(person) {
-    const modal = document.getElementById('attest-modal');
-    document.getElementById('attest-modal-title').innerText = `Straffeattest: ${person.visningsnavn}`;
-    let html = `<div class="attest-summary">
-        <p><strong>Discord ID:</strong> ${person.discord_id}</p>
-        <p><strong>Gæld:</strong> ${person.total_gald.toLocaleString('da-DK')} DKK</p>
-        <p><strong>Status:</strong> ${person.isAfsoner ? '🔴 Afsoner' : '🟢 Fri'}</p>
-    </div><hr><ul>`;
-    person.boeder.forEach(b => {
-        html += `<li><strong>${b.amount} DKK</strong> - ${escapeHtml(b.reason)} (${formatDate(b.created_at)})</li>`;
-    });
-    html += '</ul>';
-    document.getElementById('attest-modal-body').innerHTML = html;
-    modal.style.display = 'block';
-}
-
-function setupSecurityLocks() {
-    const reset = () => {
-        clearTimeout(inactivityTimer);
-        inactivityTimer = setTimeout(() => {
-            document.getElementById('lock-screen').style.display = 'flex';
-        }, LOCK_TIMEOUT);
-    };
-    ['mousemove', 'mousedown', 'keypress'].forEach(e => document.addEventListener(e, reset));
-    reset();
-
-    document.getElementById('unlock-form')?.addEventListener('submit', async (e) => {
+window.addEventListener('beforeunload', (e) => {
+    if (currentProfile?.is_on_duty && !isLoggingOut) {
         e.preventDefault();
-        const pwd = document.getElementById('unlock-password').value;
-        const { error } = await _supabase.auth.signInWithPassword({ email: currentSession.user.email, password: pwd });
-        if (!error) {
-            document.getElementById('lock-screen').style.display = 'none';
-            document.getElementById('unlock-password').value = '';
-            reset();
-        } else {
-            alert('Forkert kode!');
-        }
-    });
-}
-
-function setupProfileSecurity() {
-    document.getElementById('change-password-form')?.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const p1 = document.getElementById('new-pwd').value;
-        const p2 = document.getElementById('new-pwd-confirm').value;
-        if (p1 !== p2) return alert('Kodeord stemmer ikke overens!');
-        const { error } = await _supabase.auth.updateUser({ password: p1 });
-        if (!error) { alert('✅ Kodeord ændret!'); e.target.reset(); }
-        else { alert('Fejl: ' + error.message); }
-    });
-}
-
-function setupCreateSag() {
-    document.getElementById('create-sag-form')?.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const data = {
-            navn: document.getElementById('sag-navn').value,
-            foedselsdag: document.getElementById('sag-dato').value,
-            cpr: document.getElementById('sag-cpr').value,
-            beskrivelse: document.getElementById('sag-beskrivelse').value,
-            oprettet_af: currentSession.user.id,
-            sidst_redigeret_af: currentSession.user.id
-        };
-        const { data: sag, error } = await _supabase.from('sager').insert([data]).select().single();
-        if (!error) {
-            await _supabase.from('sags_logs').insert([{ sags_id: sag.id, bruger_id: currentSession.user.id, handling: 'opret' }]);
-            alert('✅ Sag oprettet!');
-            e.target.reset();
-        }
-    });
-}
-
-function setupCreateBoede() {
-    document.getElementById('new-boede-btn')?.addEventListener('click', () => {
-        const f = document.getElementById('boede-form-container');
-        if (f) f.style.display = f.style.display === 'none' ? 'block' : 'none';
-    });
-    document.getElementById('create-boede-form')?.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const data = {
-            user_discord_id: document.getElementById('boede-borger').value,
-            user_name: document.getElementById('boede-borger').value,
-            amount: parseFloat(document.getElementById('boede-beloeb').value),
-            paragraf: document.getElementById('boede-paragraf').value,
-            reason: document.getElementById('boede-aarsag').value,
-            officer_id: currentSession.user.id,
-            officer_name: currentProfile?.navn || 'MDT',
-            kilde: 'web'
-        };
-        const { error } = await _supabase.from('boeder').insert([data]);
-        if (!error) { alert('✅ Bøde udstedt!'); e.target.reset(); document.getElementById('boede-form-container').style.display='none'; }
-    });
-}
-
-function setupEditModal() {
-    document.getElementById('close-attest-modal')?.addEventListener('click', () => {
-        document.getElementById('attest-modal').style.display = 'none';
-    });
-}
-
-function setupRealtime() {
-    _supabase.channel('mdt-realtime')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'sager' }, () => loadSager())
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'boeder' }, () => loadBoeder())
-        .subscribe();
-}
-
-async function loadAdminUsers() {
-    const list = document.getElementById('user-list');
-    if (!list) return;
-    const { data: users } = await _supabase.from('betjente').select('*').order('navn');
-    list.innerHTML = '';
-    users?.forEach(u => {
-        const div = document.createElement('div');
-        div.className = 'admin-user-card';
-        div.innerHTML = `<span>${escapeHtml(u.navn)} (${u.rolle})</span>
-            <button class="btn-sm btn-delete del-user" data-id="${u.id}">SLET</button>`;
-        list.appendChild(div);
-    });
-    list.querySelectorAll('.del-user').forEach(b => b.addEventListener('click', () => deleteUserAccount(b.dataset.id)));
-}
-
-async function deleteUserAccount(id) {
-    if (confirm('Slet bruger?')) {
-        const { data: { session } } = await _supabase.auth.getSession();
-        await fetch(SUPABASE_URL + '/functions/v1/delete-user', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + session.access_token, 'apikey': SUPABASE_ANON_KEY },
-            body: JSON.stringify({ targetUserId: id })
-        });
-        loadAdminUsers();
+        e.returnValue = 'Du er stadig på vagt! Du skal logge af vagt før du lukker MDT.';
     }
-}
+});
 
-async function loadTrash() {
-    const list = document.getElementById('trash-liste');
-    if (!list) return;
-    const { data } = await _supabase.from('sager').select('*').not('slettet_dato', 'is', null);
-    list.innerHTML = data?.length ? '' : 'Ingen sager i papirkurven.';
-    data?.forEach(s => {
-        const card = document.createElement('div');
-        card.className = 'sag-card';
-        card.innerHTML = `<h3>${s.navn}</h3><button class="btn-sm" onclick="restoreSag('${s.id}')">GENDAN</button>`;
-        list.appendChild(card);
-    });
-}
+document.getElementById('nav-logout').addEventListener('click', async () => {
+    if (confirm('Vil du afslutte din vagt og logge ud?')) {
+        isLoggingOut = true;
+        await _supabase.from('betjente').update({ is_on_duty: false }).eq('id', currentProfile.id);
+        await _supabase.auth.signOut();
+        window.location.href = 'login.html';
+    }
+});
 
 // ============================================
 // HELPERS
 // ============================================
 function isAdmin() { return currentProfile?.rolle === 'admin'; }
-function isOfficer() { return currentProfile && (currentProfile.rolle === 'admin' || currentProfile.rolle === 'betjent' || currentProfile.rolle === 'kadet'); }
-function escapeHtml(text) { const div = document.createElement('div'); div.innerText = text || ''; return div.innerHTML; }
-function formatDate(d) { return d ? new Date(d).toLocaleDateString('da-DK', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' }) : 'Ukendt'; }
+
+function showToast(msg) {
+    const t = document.getElementById('notif-toast');
+    t.innerText = msg;
+    t.style.display = 'block';
+    setTimeout(() => { t.style.display = 'none'; }, 4000);
+}
+
+// Genbruger eksisterende sags-logik med små UI tilpasninger
+async function loadSager(query = '') {
+    const list = document.getElementById('sags-liste');
+    if (!list) return;
+
+    let q = _supabase.from('sager').select('*').is('slettet_dato', null).order('oprettet_dato', { ascending: false });
+    if (query) q = q.or(`navn.ilike.%${query}%,cpr.ilike.%${query}%`);
+
+    const { data } = await q;
+    list.innerHTML = data?.map(s => `
+        <div class="stat-card" style="margin-bottom:10px; display:flex; justify-content:space-between; align-items:center;">
+            <div>
+                <strong>${s.navn}</strong><br>
+                <span style="font-size:0.8rem; color:var(--police-text-muted);">CPR: ${s.cpr}</span>
+            </div>
+            <button class="btn-secondary" onclick="openEditModal('${s.id}')">SE SAG</button>
+        </div>
+    `).join('') || 'Ingen sager fundet.';
+}
+
+// Søge-event
+document.getElementById('search-input')?.addEventListener('input', (e) => {
+    loadSager(e.target.value);
+});
+
+// INITIALISERING AF ANDRE LISTER
+async function loadBoeder() {
+    const list = document.getElementById('boeder-liste');
+    if (!list) return;
+    const { data } = await _supabase.from('boeder').select('*').is('slettet_dato', null).order('created_at', { ascending: false });
+    list.innerHTML = data?.map(b => `
+        <div class="stat-card" style="margin-bottom:10px;">
+            <div style="display:flex; justify-content:space-between;">
+                <strong>⚖️ ${b.user_name}</strong>
+                <span class="badge ${b.afsonet ? 'on-duty-badge' : 'off-duty-badge'}">${b.afsonet ? 'AFSONET' : 'MANGLER'}</span>
+            </div>
+            <div style="margin-top:5px; font-size:0.9rem;">
+                ${b.amount.toLocaleString()} kr. | ${b.jail_days || 0} dage<br>
+                <span style="color:var(--police-text-muted); font-size:0.8rem;">${b.paragraf}</span>
+            </div>
+        </div>
+    `).join('') || 'Ingen bøder.';
+}
+
+async function loadStraffeattester(query = '') {
+    const list = document.getElementById('attester-liste');
+    if (!list) return;
+    const { data: borgere } = await _supabase.from('borgere').select('*').order('visningsnavn');
+    list.innerHTML = borgere?.filter(b => b.visningsnavn.toLowerCase().includes(query.toLowerCase())).map(b => `
+        <div class="lov-item" onclick="viewAttest('${b.discord_id}')">
+            <span>👤 ${b.visningsnavn}</span>
+            <span style="font-size:0.8rem; color:var(--police-accent);">SE ATTEST</span>
+        </div>
+    `).join('') || 'Ingen borgere fundet.';
+}
+
+function setupEventListeners() {
+    document.getElementById('search-attest-input')?.addEventListener('input', (e) => {
+        loadStraffeattester(e.target.value);
+    });
+}
