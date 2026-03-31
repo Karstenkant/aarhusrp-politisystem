@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>POLITI MDT - Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="dashboard-body">
+
+    <div id="lock-screen" class="lock-screen" style="display:none;">
+        <div class="lock-box">
+            <img src="po_logo.png" width="80" style="margin-bottom:10px; border-radius:4px;">
+            <h2>Session Låst</h2>
+            <p>Indtast dit kodeord for at fortsætte arbejdet.</p>
+            <form id="unlock-form">
+                <div class="input-group">
+                    <input type="password" id="unlock-password" placeholder="Adgangskode" required>
+                </div>
+                <button type="submit">LÅS OP</button>
+                <div id="unlock-error" class="error-msg"></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- OBLIGATORISK VAGT SYSTEM -->
+    <div id="duty-screen" class="duty-screen" style="display:none;">
+        <div class="duty-box">
+            <img src="po_logo.png" alt="Politi">
+            <h2>Meld dig på vagt</h2>
+            <p>I henhold til reglementet kræver adgang til MDT terminalen, at du formelt indstempler dig på din nuværende vagt.</p>
+            <button id="clock-in-btn" class="btn-primary" style="font-size:1.1rem; letter-spacing:1px;">MELD PÅ VAGT NU</button>
+            <div style="margin-top:15px;"><a href="#" id="duty-logout" style="color:#aaa; font-size:0.8rem;">Log ud i stedet</a></div>
+        </div>
+    </div>
+
+    <nav class="top-nav">
+        <div class="nav-brand">
+            <img src="po_logo.png" alt="Politi Logo">
+            <span>MIDT- OG VESTJYLLANDS POLITI</span>
+        </div>
+        <div class="nav-user">
+            <span id="vagt-status" class="badge" style="background:var(--success-green);display:none;">✅ PÅ VAGT</span>
+            <span id="user-name">Loading...</span>
+            <span id="user-role" class="badge">Betjent</span>
+            <button id="clock-out-btn" style="width:auto; padding:8px 16px; background:var(--error-red); color:white; border:none; font-size:0.8rem; border-radius:4px;">Log Af Vagt</button>
+        </div>
+    </nav>
+
+    <main class="dashboard-container">
+        <aside class="sidebar">
+            <button class="nav-item active" data-target="search-section">🔍 Søg i Sager</button>
+            <button class="nav-item" data-target="create-section">➕ Opret Ny Sag</button>
+            <button class="nav-item" data-target="boeder-section">⚖️ Bøde Log</button>
+            <button class="nav-item" data-target="attester-section">📜 Straffeattester</button>
+            <button class="nav-item" data-target="profile-section">🔒 Profil & Sikkerhed</button>
+            <button id="admin-nav" class="nav-item admin-only" data-target="admin-section">⚙️ Admin Panel</button>
+            <button class="nav-item admin-only" data-target="trash-section">🗑️ Papirkurv</button>
+        </aside>
+
+        <section class="content">
+            <!-- SØG SAGER -->
+            <div id="search-section" class="tab-content active">
+                <div class="header-row">
+                    <h1>Søg i Database</h1>
+                </div>
+                <div class="filter-row">
+                    <div class="search-bar">
+                        <input type="text" id="search-input" placeholder="Søg på Navn, CPR eller Sags-ID...">
+                    </div>
+                    <div class="date-filter">
+                        <input type="date" id="filter-from" title="Fra dato">
+                        <span>→</span>
+                        <input type="date" id="filter-to" title="Til dato">
+                        <button id="filter-btn" class="btn-sm btn-edit">Filtrer</button>
+                    </div>
+                </div>
+                <div class="sags-liste" id="sags-liste">
+                    <div class="loading">Henter data...</div>
+                </div>
+            </div>
+
+            <!-- OPRET SAG -->
+            <div id="create-section" class="tab-content">
+                <h1>Opret Ny Sag</h1>
+                <form id="create-sag-form" class="sag-form">
+                    <div class="form-grid">
+                        <div class="input-group">
+                            <label>Navn på person</label>
+                            <input type="text" id="sag-navn" placeholder="Fornavn Efternavn" required>
+                        </div>
+                        <div class="input-group">
+                            <label>Fødselsdag</label>
+                            <input type="date" id="sag-dato" required>
+                        </div>
+                        <div class="input-group">
+                            <label>CPR-nummer</label>
+                            <input type="text" id="sag-cpr" placeholder="DDMMYY-XXXX" required>
+                        </div>
+                    </div>
+                    <div class="input-group">
+                        <label>Sagsbeskrivelse / Forløb</label>
+                        <textarea id="sag-beskrivelse" rows="5" placeholder="Beskriv hændelsen her..."></textarea>
+                    </div>
+                    <button type="submit" class="btn-primary">GEM SAG</button>
+                </form>
+            </div>
+
+            <!-- BØDER -->
+            <div id="boeder-section" class="tab-content">
+                <div class="header-row">
+                    <h1>⚖️ Bøderegister</h1>
+                    <button id="new-boede-btn" class="btn-sm btn-edit">+ Ny Bøde</button>
+                </div>
+                <!-- Opret bøde form (skjult som standard) -->
+                <div id="boede-form-container" style="display:none;">
+                    <form id="create-boede-form" class="sag-form">
+                        <div class="form-grid">
+                            <div class="input-group">
+                                <label>Discord ID / Borger navn</label>
+                                <input type="text" id="boede-borger" placeholder="Discord ID eller navn" required>
+                            </div>
+                            <div class="input-group">
+                                <label>Beløb (DKK)</label>
+                                <input type="number" id="boede-beloeb" placeholder="25000" required>
+                            </div>
+                            <div class="input-group">
+                                <label>Paragraf</label>
+                                <input type="text" id="boede-paragraf" placeholder="§332">
+                            </div>
+                        </div>
+                        <div class="input-group">
+                            <label>Årsag</label>
+                            <textarea id="boede-aarsag" rows="3" placeholder="Beskriv forseelsen..."></textarea>
+                        </div>
+                        <button type="submit" class="btn-primary">UDSTED BØDE & FÆNGSL</button>
+                    </form>
+                </div>
+                <div class="sags-liste" id="boeder-liste">
+                    <div class="loading">Henter bøder...</div>
+                </div>
+            </div>
+
+            <!-- STRAFFEATTESTER -->
+            <div id="attester-section" class="tab-content">
+                <div class="header-row">
+                    <h1>📜 Straffeattest Register</h1>
+                </div>
+                <p style="color:#666; margin-bottom:1rem;">Her finder du et overblik over alle borgere med pletter på straffeattesten. Søg på Discord ID eller Navn.</p>
+                <div class="filter-row">
+                    <div class="search-bar">
+                        <input type="text" id="search-attest-input" placeholder="Indtast Discord ID eller delvist navn...">
+                    </div>
+                </div>
+                <div class="sags-liste" id="attester-liste">
+                    <div class="loading">Beregner straffeattester...</div>
+                </div>
+            </div>
+
+            <!-- PROFIL & SIKKERHED -->
+            <div id="profile-section" class="tab-content">
+                <h1>🔒 Profil & Sikkerhed</h1>
+                <div class="admin-card" style="max-width: 500px; margin-top:1rem;">
+                    <h3>Skift Adgangskode</h3>
+                    <p style="font-size: 0.9rem; color: #666; margin-bottom: 1rem;">Her kan du ændre dit personlige kodeord for at opretholde sikkerheden.</p>
+                    <form id="change-password-form" class="sag-form">
+                        <div class="input-group">
+                            <label>Nyt Kodeord (min 6. tegn)</label>
+                            <input type="password" id="new-pwd" placeholder="Indtast ny kode" required minlength="6">
+                        </div>
+                        <div class="input-group">
+                            <label>Bekræft Kodeord</label>
+                            <input type="password" id="new-pwd-confirm" placeholder="Gentag ny kode" required minlength="6">
+                        </div>
+                        <button type="submit" class="btn-primary" style="background:var(--police-accent); color:white;">OPDATER KODEORD</button>
+                    </form>
+                    <div id="pwd-msg" class="error-msg" style="margin-top:10px;"></div>
+                </div>
+            </div>
+
+            <!-- ADMIN -->
+            <div id="admin-section" class="tab-content">
+                <h1>⚙️ Admin Kontrolpanel</h1>
+                <div class="admin-grid">
+                    <div class="admin-card">
+                        <h3>Opret Ny Bruger</h3>
+                        <form id="create-user-form">
+                            <div class="form-grid">
+                                <div class="input-group">
+                                    <label>Email</label>
+                                    <input type="email" id="new-user-email" placeholder="betjent@politi.dk" required>
+                                </div>
+                                <div class="input-group">
+                                    <label>Adgangskode</label>
+                                    <input type="password" id="new-user-password" placeholder="Midlertidig kode" required>
+                                </div>
+                                <div class="input-group">
+                                    <label>Navn</label>
+                                    <input type="text" id="new-user-name" placeholder="Fornavn Efternavn" required>
+                                </div>
+                            </div>
+                            <div class="input-group">
+                                <label>Rolle</label>
+                                <select id="new-user-role">
+                                    <option value="kadet">Kadet</option>
+                                    <option value="betjent">Betjent</option>
+                                    <option value="admin">Admin</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn-primary">OPRET BRUGER</button>
+                        </form>
+                        <div id="create-user-msg" class="error-msg"></div>
+                    </div>
+                    <div class="admin-card">
+                        <h3>Alle Betjente</h3>
+                        <div id="user-list"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PAPIRKURV (Admin only) -->
+            <div id="trash-section" class="tab-content">
+                <h1>🗑️ Papirkurv (7 dages opbevaring)</h1>
+                <p class="trash-info">Slettede sager opbevares i 7 dage, hvorefter de fjernes permanent.</p>
+                <div class="sags-liste" id="trash-liste">
+                    <div class="loading">Henter slettede sager...</div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- MODAL: Rediger sag -->
+    <div id="edit-modal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal">&times;</span>
+            <h2>Rediger Sag</h2>
+            <form id="edit-sag-form">
+                <input type="hidden" id="edit-id">
+                <div class="input-group">
+                    <label>Navn</label>
+                    <input type="text" id="edit-navn" required>
+                </div>
+                <div class="input-group">
+                    <label>Beskrivelse</label>
+                    <textarea id="edit-beskrivelse" rows="5"></textarea>
+                </div>
+                <button type="submit" class="btn-primary">OPDATER & LOGFØR</button>
+            </form>
+            <div class="edit-history">
+                <h3>Ændringshistorik</h3>
+                <ul id="log-list"></ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: Vis Straffeattest -->
+    <div id="attest-modal" class="modal">
+        <div class="modal-content" style="max-width:600px;">
+            <span class="close-modal" id="close-attest-modal">&times;</span>
+            <h2 id="attest-modal-title">📜 Straffeattest</h2>
+            <div id="attest-modal-body" style="margin-top:1.5rem;">
+                <!-- Indhold genereres via JS -->
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="supabase.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>POLITI MDT - Login</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="login-body">
+    <div class="login-container">
+        <div class="police-logo">
+            <img src="po_logo.png" alt="Midt- og Vestjyllands Politi">
+            <div class="logo-text">POLITI</div>
+            <span class="subtitle">MIDT- OG VESTJYLLAND</span>
+        </div>
+        
+        <form id="login-form" class="login-box">
+            <h1>Log ind</h1>
+            <p>Indtast dine tjeneste-oplysninger for at fortsætte</p>
+            
+            <div class="input-group">
+                <label for="email">E-mail</label>
+                <input type="email" id="email" placeholder="navn@politi.dk" required>
+            </div>
+            
+            <div class="input-group">
+                <label for="password">Adgangskode</label>
+                <input type="password" id="password" placeholder="••••••••" required>
+            </div>
+            
+            <button type="submit" id="login-btn">LOG IND</button>
+            <div id="error-msg" class="error-msg"></div>
+        </form>
+        
+        <div class="footer">
+            &copy; 2026 Rigspolitiet - MDT Terminal v1.0.0
+        </div>
+    </div>
+
+    <!-- Supabase SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="supabase.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
